@@ -5,3 +5,4 @@ WiFi Attack Tool
 * Pyrit
 * curl
 * tcpdump
+* aircrack-ng
