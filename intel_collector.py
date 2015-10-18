@@ -120,6 +120,12 @@ class IntelCollector(object):
             print map(str, self.clients)
             time.sleep(self._interval)
 
+    def choose_target(self):
+        """
+        :return: waits till a target is chosen
+        """
+        pass
+
 
 def main(args):
     parser = argparse.ArgumentParser()
