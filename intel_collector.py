@@ -10,6 +10,7 @@ import tempfile
 import glob
 import argparse
 import sys
+import signal
 
 class Target:
     """
@@ -48,6 +49,7 @@ class IntelCollector(object):
                      "--output-format", "csv",
                      "--encrypt", "WPA",
                      self._iface]
+        self._proc_airodump = None
 
     def __del__(self):
         for f in glob.glob(self._prefix + "*"):
@@ -111,14 +113,25 @@ class IntelCollector(object):
 
         return (targets, clients)
 
-    def start(self):
-        airodump = subprocess.Popen(self._cmd, stdout=open(os.devnull, 'w'), stderr=subprocess.STDOUT)
+    def _start(self):
+        self._proc_airodump = subprocess.Popen(self._cmd, stdout=open(os.devnull, 'w'), stderr=subprocess.STDOUT)
+        self._proc_airodump.send_signal(signal.SIGSTOP)
 
-        while not airodump.poll():
-            (self.targets, self.clients) = self.parse_csv()
-            print map(str, self.targets)
-            print map(str, self.clients)
-            time.sleep(self._interval)
+    def active(self):
+        """
+        sets frequency hopping and other active stuff
+        :return: None
+        """
+        self._proc_airodump.send_signal(signal.SIGCONT)
+
+    def passive(self):
+        """
+        stops frequency hopping and other active stuff
+        in practice, puts the process to stop
+        :return: None
+        """
+        self._proc_airodump.send_signal(signal.SIGSTOP)
+
 
     def choose_target(self):
         """
