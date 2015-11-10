@@ -5,36 +5,12 @@ import csv
 import os
 import re
 import subprocess
-import time
 import tempfile
 import glob
 import argparse
 import sys
-import signal
-
-class Target:
-    """
-        Holds data for a Target (aka Access Point aka Router)
-    """
-    def __init__(self, bssid, power, data, channel, encryption, ssid):
-        self.bssid = bssid
-        self.power = power
-        self.data = data
-        self.channel = channel
-        self.encryption = encryption
-        self.ssid = ssid
-        self.wps = False  # Default to non-WPS-enabled router.
-        self.key = ''
-
-
-class Client:
-    """
-        Holds data for a Client (device connected to Access Point/Router)
-    """
-    def __init__(self, bssid, station, power):
-        self.bssid = bssid
-        self.station = station
-        self.power = power
+import time
+import common
 
 
 class IntelCollector(object):
@@ -47,7 +23,7 @@ class IntelCollector(object):
         self._cmd = ["airodump-ng",
                      "-w", self._prefix,
                      "--output-format", "csv",
-                     "--encrypt", "WPA",
+                     "--encrypt", "WPA2",
                      self._iface]
         self._proc_airodump = None
 
@@ -55,89 +31,111 @@ class IntelCollector(object):
         for f in glob.glob(self._prefix + "*"):
             os.remove(f)
 
-    def parse_csv(self):
+    def _parse_csv_ap(self, row):
+        if len(row) < 14:
+            return None
+        if row[0].strip() == 'BSSID':
+            return None
+        enc = row[5].strip()
+        wps = False
+        # Ignore non-WPA and non-WEP encryption
+        if enc.find('WPA2') == -1:
+            return None
+        if enc == "WPA2WPA" or enc == "WPA2 WPA":
+            enc = "WPA2"
+            wps = True
+        if len(enc) > 4:
+            enc = enc[4:].strip()
+        power = int(row[8].strip())
+
+        ssid = row[13].strip()
+        ssidlen = int(row[12].strip())
+        ssid = ssid[:ssidlen]
+
+        if power < 0:
+            power += 100
+        a = common.AccessPoint(row[0].strip(), power, row[10].strip(),
+                               row[3].strip(), enc, ssid)
+        a.wps = wps
+        return a
+
+    def _parse_csv_client(self, row):
+        if len(row) < 6:
+            return None
+
+        station = re.sub(r'[^a-zA-Z0-9:]', '', row[5].strip())
+        if station == 'notassociated':
+            return None
+
+        bssid = re.sub(r'[^a-zA-Z0-9:]', '', row[0].strip())
+        power = row[3].strip()
+        return common.Client(bssid, station, power)
+
+    def _parse_csv(self):
         """
             Parses given lines from airodump-ng CSV file.
             Returns tuple: List of targets and list of clients.
         """
         filename = self._prefix + "-01.csv"
-        if not os.path.exists(filename): return ([], [])
-        targets = []
+        if not os.path.exists(filename):
+            return ([], [])
+
+        aps = []
         clients = []
+        hit_clients = False
         try:
-            hit_clients = False
             with open(filename, 'rb') as csvfile:
-                targetreader = csv.reader((line.replace('\0', '') for line in csvfile), delimiter=',')
+                targetreader = csv.reader(
+                    (line.replace('\0', '') for line in csvfile), delimiter=',')
                 for row in targetreader:
                     if len(row) < 2:
                         continue
+                    if not hit_clients and row[0].strip() == 'Station MAC':
+                        hit_clients = True
+                        continue
+
                     if not hit_clients:
-                        if row[0].strip() == 'Station MAC':
-                            hit_clients = True
-                            continue
-                        if len(row) < 14:
-                            continue
-                        if row[0].strip() == 'BSSID':
-                            continue
-                        enc = row[5].strip()
-                        wps = False
-                        # Ignore non-WPA and non-WEP encryption
-                        if enc.find('WPA2') != -1: continue
-                        if enc == "WPA2WPA" or enc == "WPA2 WPA":
-                            enc = "WPA2"
-                            wps = True
-                        if len(enc) > 4:
-                            enc = enc[4:].strip()
-                        power = int(row[8].strip())
-
-                        ssid = row[13].strip()
-                        ssidlen = int(row[12].strip())
-                        ssid = ssid[:ssidlen]
-
-                        if power < 0: power += 100
-                        t = Target(row[0].strip(), power, row[10].strip(), row[3].strip(), enc, ssid)
-                        t.wps = wps
-                        targets.append(t)
+                        ap = self._parse_csv_ap(row)
+                        if ap:
+                            aps.append(ap)
                     else:
-                        if len(row) < 6:
-                            continue
-                        bssid = re.sub(r'[^a-zA-Z0-9:]', '', row[0].strip())
-                        station = re.sub(r'[^a-zA-Z0-9:]', '', row[5].strip())
-                        power = row[3].strip()
-                        if station != 'notassociated':
-                            c = Client(bssid, station, power)
-                            clients.append(c)
+                        client = self._parse_csv_client(row)
+                        if client:
+                            clients.append(client)
+
         except IOError as e:
             print "I/O error({0}): {1}".format(e.errno, e.strerror)
             return ([], [])
 
-        return (targets, clients)
+        return (aps, clients)
 
-    def _start(self):
-        self._proc_airodump = subprocess.Popen(self._cmd, stdout=open(os.devnull, 'w'), stderr=subprocess.STDOUT)
-        self._proc_airodump.send_signal(signal.SIGSTOP)
-
-    def active(self):
-        """
-        sets frequency hopping and other active stuff
-        :return: None
-        """
-        self._proc_airodump.send_signal(signal.SIGCONT)
-
-    def passive(self):
-        """
-        stops frequency hopping and other active stuff
-        in practice, puts the process to stop
-        :return: None
-        """
-        self._proc_airodump.send_signal(signal.SIGSTOP)
-
-
-    def choose_target(self):
+    def choose_target(self, timeout, ignore=[]):
         """
         :return: waits till a target is chosen
         """
-        pass
+        self._proc_airodump = subprocess.Popen(self._cmd,
+                                               stdout=open(os.devnull, 'w'),
+                                               stderr=subprocess.STDOUT)
+        time.sleep(timeout)
+        (aps, clients) = self._parse_csv()
+        self._proc_airodump.terminate()
+        self._proc_airodump.wait()
+
+        # remove ignored access points
+        aps = [ap for ap in aps if ap.bssid not in ignore]
+        aps_bssid = [ap.bssid for ap in aps]
+
+        # remove clients without aps (or ignored aps)
+        clients = [c for c in clients if c.station in aps_bssid]
+        clients = sorted(clients, key=lambda c: c.power, reverse=True)
+
+        if not clients:
+            return None, []
+
+        # find ap with strongest client signal
+        ap = [ap for ap in aps if ap.bssid == clients[0].station][0]
+        clients = [c for c in clients if c.station == ap]
+        return ap, clients
 
 
 def main(args):
@@ -145,7 +143,7 @@ def main(args):
     parser.add_argument("iface", type=str)
     parsed = parser.parse_args(args[1:])
 
-    IntelCollector(parsed.iface).start()
+    IntelCollector(parsed.iface).choose_target(30)
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))
