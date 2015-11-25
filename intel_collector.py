@@ -12,10 +12,11 @@ import sys
 import time
 import common
 import logging
+import shutil
 
 
 class IntelCollector(object):
-    def __init__(self, iface):
+    def __init__(self, iface, save_dir=None):
         self._prefix = tempfile.mktemp("wat")
         self._iface = iface
         self.targets = None
@@ -27,6 +28,7 @@ class IntelCollector(object):
                      "--encrypt", "WPA2",
                      self._iface]
         self._proc_airodump = None
+        self._save_dir = save_dir
 
     def __del__(self):
         for f in glob.glob(self._prefix + "*"):
@@ -74,15 +76,32 @@ class IntelCollector(object):
             power = -1000000
         return common.Client(bssid, station, power)
 
-    def _parse_csv(self):
+    def _get_csvfiles(self):
+        files = glob.glob(self._prefix + "-*.csv")
+        if not file:
+            return None
+
+        return files
+
+    def _parse_csvs(self):
         """
             Parses given lines from airodump-ng CSV file.
             Returns tuple: List of targets and list of clients.
         """
-        filename = self._prefix + "-01.csv"
-        if not os.path.exists(filename):
+        filenames = self._get_csvfiles()
+        if not filenames:
             return ([], [])
 
+        aps = []
+        clients = []
+        for filename in filenames:
+            temp_aps, temp_clients = self._parse_csv(filename)
+            aps.extend(temp_aps)
+            clients.extend(temp_clients)
+
+        return aps, clients
+
+    def _parse_csv(self, filename):
         aps = []
         clients = []
         hit_clients = False
@@ -112,20 +131,47 @@ class IntelCollector(object):
 
         return (aps, clients)
 
+    def _save_csvfiles(self):
+        if not self._save_dir:
+            return
+
+        filenames = self._get_csvfiles()
+        if not filenames:
+            return
+
+        for filename in filenames:
+            destfile = os.path.basename(filename)
+            destfile, ext = os.path.splitext(destfile)
+            destfile = destfile + "_" + str(time.time()) + ext
+            destfile = os.path.join(self._save_dir, destfile)
+            shutil.copy2(filename, destfile)
+
+
+    def _delete_files(self):
+        filenames = self._get_csvfiles()
+        for filename in filenames:
+            os.unlink(filename)
+
     def choose_target(self, timeout, ignore=[]):
         """
         :return: waits till a target is chosen
         """
-        self._proc_airodump = subprocess.Popen(self._cmd,
-                                               stdout=open(os.devnull, 'w'),
-                                               stderr=subprocess.STDOUT)
+        proc_airodump = subprocess.Popen(self._cmd,
+                                         stdout=open(os.devnull, 'w'),
+                                         stderr=subprocess.STDOUT)
         time.sleep(timeout)
-        (aps, clients) = self._parse_csv()
-        self._proc_airodump.terminate()
-        self._proc_airodump.wait()
+        proc_airodump.terminate()
+        proc_airodump.wait()
+
+        self._save_csvfiles()
+        (aps, clients) = self._parse_csvs()
+        self._delete_files()
         for cli in clients:
             logging.debug("clients: %s, %d, %s" % (cli.bssid, cli.power,
                                                    cli.station))
+
+        for ap in aps:
+            logging.debug("ap: %s", ap.bssid)
 
         # remove ignored access points
         aps = [ap for ap in aps if ap.bssid not in ignore]

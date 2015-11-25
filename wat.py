@@ -37,9 +37,12 @@ def main(args):
     parser = argparse.ArgumentParser()
     parser.add_argument("iface", help="interface in monitor mode")
     parser.add_argument("server", help="ip:port of cracking server")
+    parser.add_argument("--save-dir", type=str, help="directory to save csvs of"
+                        " airodump to", default=None)
     parsed = parser.parse_args(args[1:])
 
-    intel = intel_collector.IntelCollector(parsed.iface)
+    intel = intel_collector.IntelCollector(parsed.iface,
+                                           save_dir=parsed.save_dir)
 
     stripper = stripload.StripLoad(parsed.iface, str2addr(parsed.server))
     stripper.start()
